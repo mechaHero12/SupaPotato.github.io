@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mini GTA Clone</title>
+<style>
+  body { margin:0; overflow:hidden; background:black; }
+  canvas { display:block; margin:0 auto; background:#000; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<script>
+/* =========================
+   GAME SETUP
+========================= */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const GAME_WIDTH = canvas.width;
+const GAME_HEIGHT = canvas.height;
+let gameState = {
+  player: { x: 400, y: 300, width: 32, height: 32, dirX:0, dirY:0 },
+  npcs: [],
+  vehicles: [],
+  police: [],
+  bullets: [],
+  explosions: [],
+  weather: { type: 'rain', intensity: 0.3 },
+  time: 12,
+  missions: []
+};
+
+/* =========================
+   NPCs & VEHICLES
+========================= */
+class NPC {
+  constructor(x, y, color='#00ff00') {
+    this.x = x; this.y = y; this.width=32; this.height=32; this.color=color;
+    this.speed = 100;
+    this.dirX = Math.random()*2-1;
+    this.dirY = Math.random()*2-1;
+  }
+  update(dt){
+    this.x += this.dirX * this.speed * dt;
+    this.y += this.dirY * this.speed * dt;
+    if(this.x<0||this.x>GAME_WIDTH-32) this.dirX*=-1;
+    if(this.y<0||this.y>GAME_HEIGHT-32) this.dirY*=-1;
+  }
+}
+for(let i=0;i<5;i++) gameState.npcs.push(new NPC(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT));
+
+class Vehicle {
+  constructor(x,y,color='#ff00ff') {
+    this.x=x; this.y=y; this.width=48; this.height=24; this.color=color;
+    this.speed=150; this.dirX=Math.random()*2-1; this.dirY=Math.random()*2-1;
+  }
+  update(dt){
+    this.x += this.dirX*this.speed*dt;
+    this.y += this.dirY*this.speed*dt;
+    if(this.x<0||this.x>GAME_WIDTH-48) this.dirX*=-1;
+    if(this.y<0||this.y>GAME_HEIGHT-24) this.dirY*=-1;
+  }
+}
+for(let i=0;i<3;i++) gameState.vehicles.push(new Vehicle(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT));
+
+/* =========================
+   WEATHER & DAY/NIGHT
+========================= */
+function updateDayNight(dt){ gameState.time += dt*0.1; if(gameState.time>24) gameState.time=0; }
+function getSkyColor(){ 
+  if(gameState.time<6) return '#000022';
+  if(gameState.time<12) return '#87ceeb';
+  if(gameState.time<18) return '#f0e68c';
+  return '#001144';
+}
+function renderWeather(){
+  if(gameState.weather.type==='rain'){
+    ctx.fillStyle='rgba(173,216,230,'+gameState.weather.intensity+')';
+    for(let i=0;i<50;i++){
+      let rx=Math.random()*GAME_WIDTH;
+      let ry=Math.random()*GAME_HEIGHT;
+      ctx.fillRect(rx,ry,2,10);
+    }
+  }
+}
+
+/* =========================
+   AUDIO
+========================= */
+function loadSound(base64){ let audio=new Audio(); audio.src=base64; return audio; }
+const engineSound = loadSound('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+const gunshotSound = loadSound('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+const explosionSound = loadSound('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+const footstepSound = loadSound('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+const rainSound = loadSound('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+function playSound(sound,loop=false,volume=1.0){ if(!sound) return; sound.loop=loop; sound.volume=volume; sound.currentTime=0; sound.play(); }
+
+/* =========================
+   MISSIONS & COMBAT
+========================= */
+gameState.missions=[{id:1,description:"Drive to the red marker",completed:false,x:500,y:100},{id:2,description:"Avoid the police",completed:false,x:800,y:400}];
+function checkMissions(){
+  gameState.missions.forEach(m=>{
+    let dx=gameState.player.x-m.x;
+    let dy=gameState.player.y-m.y;
+    if(Math.sqrt(dx*dx+dy*dy)<32 && !m.completed){ m.completed=true; alert(`Mission Complete: ${m.description}`); }
+  });
+}
+gameState.bullets=[];
+class Bullet{constructor(x,y,dirX,dirY,speed=300){this.x=x;this.y=y;this.dirX=dirX;this.dirY=dirY;this.speed=speed;this.radius=4;} update(dt){this.x+=this.dirX*this.speed*dt;this.y+=this.dirY*this.speed*dt;} render(){ctx.fillStyle='#ffff00';ctx.beginPath();ctx.arc(this.x,this.y,this.radius,0,Math.PI*2);ctx.fill();}}
+window.addEventListener('keydown', e=>{if(e.key===' ') shootBullet();});
+function shootBullet(){let p=gameState.player; gameState.bullets.push(new Bullet(p.x+p.width/2,p.y,0,-1)); playSound(gunshotSound);}
+class Explosion{constructor(x,y,duration=0.5){this.x=x;this.y=y;this.timer=duration;} update(dt){this.timer-=dt;} render(){ctx.fillStyle='orange';ctx.beginPath();ctx.arc(this.x,this.y,20,0,Math.PI*2);ctx.fill();}}
+gameState.explosions=[];
+class Police extends NPC{constructor(x,y){super(x,y,'#0000ff');this.speed=120;} update(dt){let p=gameState.player; let dx=p.x-this.x; let dy=p.y-this.y; let dist=Math.sqrt(dx*dx+dy*dy); if(dist<300){this.dirX=dx/dist; this.dirY=dy/dist;} super.update(dt);}}
+if(gameState.police.length===0) gameState.police.push(new Police(600,200));
+
+/* =========================
+   UPDATE & RENDER
+========================= */
+function update(dt){
+  handleInput(dt);
+  updateDayNight(dt);
+  gameState.npcs.forEach(n=>n.update(dt));
+  gameState.police.forEach(p=>p.update(dt));
+  gameState.vehicles.forEach(v=>v.update(dt));
+  gameState.bullets.forEach(b=>b.update(dt));
+  gameState.explosions.forEach(e=>e.update(dt));
+  gameState.explosions=gameState.explosions.filter(e=>e.timer>0);
+  checkMissions();
+  handleCollisions();
+  updateCamera();
+}
+function render(){
+  ctx.fillStyle=getSkyColor(); ctx.fillRect(0,0,GAME_WIDTH,GAME_HEIGHT);
+  gameState.vehicles.forEach(v=>{ctx.fillStyle=v.color; ctx.fillRect(v.x,v.y,v.width,v.height);});
+  gameState.npcs.forEach(n=>{ctx.fillStyle=n.color; ctx.fillRect(n.x,n.y,n.width,n.height);});
+  gameState.police.forEach(p=>{ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,p.width,p.height);});
+  gameState.bullets.forEach(b=>b.render());
+  gameState.explosions.forEach(e=>e.render());
+  let p=gameState.player; ctx.fillStyle='#ff0000'; ctx.fillRect(p.x,p.y,p.width,p.height);
+  renderWeather();
+  renderUI();
+}
+
+/* =========================
+   UI & HUD
+========================= */
+gameState.player.health=100; gameState.player.money=500; gameState.player.weapon='Pistol'; gameState.player.wanted=0;
+const miniMap={width:150,height:150,x:GAME_WIDTH-160,y:10,scale:0.1};
+function renderUI(){
+  ctx.fillStyle='black'; ctx.fillRect(10,10,104,24);
+  ctx.fillStyle='red'; ctx.fillRect(12,12,gameState.player.health,20);
+  ctx.strokeStyle='white'; ctx.strokeRect(12,12,100,20);
+  ctx.fillStyle='yellow'; ctx.font='16px Arial'; ctx.fillText(`$${gameState.player.money}`,10,50);
+  ctx.fillStyle='white'; ctx.fillText(`Weapon: ${gameState.player.weapon}`,10,70);
+  for(let i=0;i<5;i++){ctx.fillStyle=i<gameState.player.wanted?'red':'gray'; ctx.beginPath(); ctx.arc(10+i*18,90,6,0,Math.PI*2); ctx.fill();}
+  let y=120; gameState.missions.forEach(m=>{ctx.fillText(`${m.completed?'[✓]':'[ ]'} ${m.description}`,10,y); y+=20;});
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(miniMap.x,miniMap.y,miniMap.width,miniMap.height);
+  ctx.fillStyle='red'; ctx.fillRect(miniMap.x+gameState.player.x*miniMap.scale, miniMap.y+gameState.player.y*miniMap.scale,5,5);
+  ctx.fillStyle='yellow'; gameState.npcs.forEach(npc=>{ctx.fillRect(miniMap.x+npc.x*miniMap.scale, miniMap.y+npc.y*miniMap.scale,4,4);});
+  ctx.fillStyle='blue'; gameState.police.forEach(p=>{ctx.fillRect(miniMap.x+p.x*miniMap.scale, miniMap.y+p.y*miniMap.scale,4,4);});
+  ctx.fillStyle='green'; gameState.vehicles.forEach(v=>{ctx.fillRect(miniMap.x+v.x*miniMap.scale, miniMap.y+v.y*miniMap.scale,4,4);});
+}
+
+/* =========================
+   CAMERA & COLLISIONS
+========================= */
+const camera={x:0,y:0,width:GAME_WIDTH,height:GAME_HEIGHT};
+function updateCamera(){camera.x=gameState.player.x-GAME_WIDTH/2+gameState.player.width/2; camera.y=gameState.player.y-GAME_HEIGHT/2+gameState.player.height/2;}
+function rectCollision(a,b){return a.x<b.x+b.width && a.x+a.width>b.x && a.y<b.y+b.height && a.y+a.height>b.y;}
+function handleCollisions(){
+  gameState.vehicles.forEach(v=>{if(rectCollision(gameState.player,v)){gameState.player.x-=gameState.player.dirX*200*gameLoop.dt; gameState.player.y-=gameState.player.dirY*200*gameLoop.dt;}});
+  gameState.npcs.forEach(n=>{if(rectCollision(gameState.player,n)){gameState.player.x-=gameState.player.dirX*200*gameLoop.dt; gameState.player.y-=gameState.player.dirY*200*gameLoop.dt;}});
+}
+
+/* =========================
+   INPUT
+========================= */
+const keys={};
+window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;});
+window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+function handleInput(dt){
+  let p=gameState.player; let speed=200; if(keys['shift']) speed=350;
+  p.dirX=0; p.dirY=0;
+  if(keys['w']) p.dirY=-1; if(keys['s']) p.dirY=1; if(keys['a']) p.dirX=-1; if(keys['d']) p.dirX=1;
+  if(p.dirX!==0 && p.dirY!==0){p.dirX/=Math.sqrt(2); p.dirY/=Math.sqrt(2);}
+  p.x+=p.dirX*speed*dt; p.y+=p.dirY*speed*dt;
+}
+
+/* =========================
+   GAME LOOP
+========================= */
+let lastTime=0;
+function gameLoop(timestamp){
+  if(!lastTime) lastTime=timestamp;
+  let dt=(timestamp-lastTime)/1000; lastTime=timestamp;
+  update(dt); render();
+  requestAnimationFrame(gameLoop);
+}
+ctx.imageSmoothingEnabled=false;
+playSound(rainSound,true,0.3);
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
